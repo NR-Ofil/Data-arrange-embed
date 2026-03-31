@@ -1,0 +1,2 @@
+# Phase 1 — scanner has no third-party deps (stdlib only)
+# Phase 2 & 3 deps will be added in their own requirements files
