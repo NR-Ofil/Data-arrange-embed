@@ -607,12 +607,8 @@ function renderClusterRow(containerId, data, dim) {
 }
 
 function selectCluster(dim, key) {
-  // Toggle the facet (setMode to search is handled inside runSearch via facet state)
+  // toggleFacet already calls runSearch() internally — don't call it again
   toggleFacet(dim, key);
-  if (activeFacets[dim].size > 0 || currentQuery) {
-    setMode('search');
-    runSearch();
-  }
 }
 
 // ── Mode switching ────────────────────────────────────────────────────────────
@@ -656,15 +652,25 @@ function runSearch() {
   list.innerHTML = '';
 
   const count = document.getElementById('result-count');
+  const activeFilters = [
+    ...activeFacets.product, ...activeFacets.domain, ...activeFacets.doctype
+  ];
+  const filterNote = activeFilters.length
+    ? ` <span style="color:var(--accent);font-size:10px">▸ filtered by: ${activeFilters.join(', ')}
+        <button onclick="clearAllFacets()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:10px;margin-left:4px;text-decoration:underline">clear</button></span>`
+    : '';
   count.innerHTML = filtered.length > 0
-    ? `<b>${filtered.length.toLocaleString()}</b> results`
-    : 'No results';
+    ? `<b>${filtered.length.toLocaleString()}</b> results${filterNote}`
+    : `No results${filterNote}`;
 
   if (filtered.length === 0) {
+    const filterHint = activeFilters.length
+      ? `<div style="font-size:11px;margin-top:6px;color:var(--accent);cursor:pointer" onclick="clearAllFacets()">▸ Clear active filters to search all files</div>`
+      : `<div style="font-size:11px;margin-top:6px">Only <b>${allRecords.length.toLocaleString()}</b> of 52,490 files are tagged so far — try broader terms</div>`;
     list.innerHTML = `<div class="empty-state">
       <div class="empty-icon">🔍</div>
       <div>No files matched your search</div>
-      <div style="font-size:11px;margin-top:4px">Try fewer or different keywords</div>
+      ${filterHint}
     </div>`;
     document.getElementById('show-more').style.display = 'none';
     return;
@@ -696,13 +702,10 @@ function scoreAndFilter() {
       const s = scoreRecord(rec, terms);
       if (s > 0) scored.push({ rec, s });
     }
-    if (currentSort === 'relevance') {
-      scored.sort((a, b) => b.s - a.s);
-    } else {
-      applySort(scored.map(x => x.rec));
-      return scored.map(x => x.rec);
-    }
-    return scored.map(x => x.rec);
+    // Build result array then sort — applySort mutates in place
+    const recs = scored.sort((a, b) => b.s - a.s).map(x => x.rec);
+    if (currentSort !== 'relevance') applySort(recs);
+    return recs;
   }
 
   // No query — just facets active, apply sort
