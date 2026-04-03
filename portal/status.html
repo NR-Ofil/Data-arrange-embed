@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pipeline Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0f1117;
+    --surface: #1a1d27;
+    --surface2:#222536;
+    --border:  #2e3250;
+    --accent:  #5b7cfa;
+    --green:   #34d399;
+    --yellow:  #fbbf24;
+    --red:     #f87171;
+    --muted:   #6b7280;
+    --text:    #e2e5f1;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh; padding: 24px;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  .header h1 { font-size: 20px; font-weight: 700; }
+  .header h1 span { color: var(--accent); }
+  .live-badge {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--muted);
+  }
+  .live-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); animation: pulse 1.5s infinite;
+  }
+  .live-dot.stale   { background: var(--yellow); animation: none; }
+  .live-dot.crashed { background: var(--red);    animation: none; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; } 50% { opacity: .3; }
+  }
+
+  /* ── Pipeline status banner ── */
+  .status-banner {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 20px; border-radius: 10px; margin-bottom: 20px;
+    border: 1px solid; font-size: 13px; font-weight: 500;
+  }
+  .status-banner.running  { background: rgba(52,211,153,.08); border-color: rgba(52,211,153,.3);  color: var(--green);  }
+  .status-banner.stalled  { background: rgba(251,191,36,.08);  border-color: rgba(251,191,36,.3);  color: var(--yellow); }
+  .status-banner.crashed  { background: rgba(248,113,113,.08); border-color: rgba(248,113,113,.3); color: var(--red);    }
+  .status-banner.done     { background: rgba(91,124,250,.08);  border-color: rgba(91,124,250,.3);  color: var(--accent); }
+  .status-banner .s-icon  { font-size: 18px; flex-shrink: 0; }
+  .status-banner .s-main  { flex: 1; }
+  .status-banner .s-title { font-weight: 700; font-size: 14px; }
+  .status-banner .s-sub   { font-size: 12px; opacity: .8; margin-top: 2px; }
+
+  /* ── Grid layout ── */
+  .grid-top   { display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px; margin-bottom: 16px; }
+  .grid-mid   { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .grid-bot   { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 20px;
+  }
+  .card-val  { font-size: 26px; font-weight: 700; margin-bottom: 4px; }
+  .card-lbl  { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .card-sub  { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Progress bar ── */
+  .progress-card { padding: 20px 24px; }
+  .progress-card h2 { font-size: 13px; font-weight: 600; margin-bottom: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .progress-track {
+    height: 22px; background: var(--surface2); border-radius: 11px;
+    overflow: hidden; display: flex; margin-bottom: 10px;
+  }
+  .progress-fill {
+    height: 100%; border-radius: 11px; transition: width .5s ease;
+    background: linear-gradient(90deg, var(--accent), var(--green));
+  }
+  .progress-fill.embed {
+    background: linear-gradient(90deg, #7c3aed, var(--accent));
+  }
+  .progress-labels {
+    display: flex; justify-content: space-between; font-size: 12px; color: var(--muted);
+  }
+  .progress-pct { font-size: 28px; font-weight: 700; color: var(--green); margin-bottom: 6px; }
+  .dual-progress { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+  .dual-row { display: flex; align-items: center; gap: 12px; }
+  .dual-label { font-size: 11px; color: var(--muted); width: 80px; flex-shrink: 0; text-align: right; }
+  .dual-pct   { font-size: 11px; font-weight: 600; width: 42px; flex-shrink: 0; }
+
+  /* ── Section card ── */
+  .section-card { padding: 20px 24px; }
+  .section-card h2 {
+    font-size: 13px; font-weight: 600; margin-bottom: 16px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
+    border-bottom: 1px solid var(--border); padding-bottom: 10px;
+  }
+
+  /* ── Bar chart ── */
+  .bar-list { display: flex; flex-direction: column; gap: 8px; }
+  .bar-row  { display: flex; align-items: center; gap: 10px; }
+  .bar-key  { width: 130px; font-size: 12px; text-align: right; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+  .bar-track{ flex: 1; height: 14px; background: var(--surface2); border-radius: 7px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 7px; transition: width .4s ease; }
+  .bar-cnt  { font-size: 11px; color: var(--muted); width: 40px; text-align: right; flex-shrink: 0; }
+
+  /* ── Sparkline ── */
+  .sparkline-wrap { height: 80px; position: relative; }
+  canvas { width: 100%; height: 100%; }
+  .spark-labels {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--muted); margin-top: 4px;
+  }
+
+  /* ── Feed ── */
+  .feed { display: flex; flex-direction: column; gap: 4px; max-height: 420px; overflow-y: auto; }
+  .feed-item {
+    display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+    background: var(--surface2); border-radius: 6px; font-size: 12px;
+    border: 1px solid transparent; transition: border-color .1s;
+  }
+  .feed-item:hover { border-color: var(--border); }
+  .feed-badge {
+    font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .feed-product { color: var(--muted); white-space: nowrap; flex-shrink: 0; width: 100px; overflow: hidden; text-overflow: ellipsis; }
+  .feed-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .feed-time { color: var(--muted); font-size: 10px; flex-shrink: 0; }
+
+  /* ── Errors ── */
+  .err-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+  .err-item {
+    padding: 6px 10px; background: rgba(248,113,113,.08);
+    border: 1px solid rgba(248,113,113,.2); border-radius: 6px;
+    font-size: 11px; color: var(--red); word-break: break-all;
+  }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .empty { color: var(--muted); font-size: 12px; padding: 16px 0; text-align: center; }
+
+  .eta-detail {
+    display: flex; gap: 24px; margin-top: 12px; flex-wrap: wrap;
+  }
+  .eta-item { font-size: 12px; color: var(--muted); }
+  .eta-item span { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>R:\ Pipeline <span>Dashboard</span></h1>
+  <div class="live-badge">
+    <div class="live-dot" id="live-dot"></div>
+    <span id="last-updated">Loading…</span>
+  </div>
+</div>
+
+<!-- Status banner -->
+<div class="status-banner running" id="status-banner">
+  <div class="s-icon" id="s-icon">⏳</div>
+  <div class="s-main">
+    <div class="s-title" id="s-title">Loading…</div>
+    <div class="s-sub"   id="s-sub"></div>
+  </div>
+</div>
+
+<!-- Top stat cards -->
+<div class="grid-top">
+  <div class="card">
+    <div class="card-val" id="c-processed">—</div>
+    <div class="card-lbl">Processed</div>
+    <div class="card-sub" id="c-total">of — files</div>
+  </div>
+  <div class="card">
+    <div class="card-val" style="color:var(--green)" id="c-tagged">—</div>
+    <div class="card-lbl">Tagged</div>
+  </div>
+  <div class="card">
+    <div class="card-val" style="color:#a78bfa" id="c-embedded">—</div>
+    <div class="card-lbl">Embedded</div>
+    <div class="card-sub" id="c-vectors">— vectors in Qdrant</div>
+  </div>
+  <div class="card">
+    <div class="card-val" style="color:var(--yellow)" id="c-skipped">—</div>
+    <div class="card-lbl">Skipped</div>
+    <div class="card-sub">no text extracted</div>
+  </div>
+  <div class="card">
+    <div class="card-val" style="color:var(--red)" id="c-errors">—</div>
+    <div class="card-lbl">Errors</div>
+  </div>
+  <div class="card">
+    <div class="card-val" id="c-rate">—</div>
+    <div class="card-lbl">Files / hour</div>
+    <div class="card-sub" id="c-rate-sub"></div>
+  </div>
+  <div class="card">
+    <div class="card-val" style="color:var(--accent)" id="c-eta">—</div>
+    <div class="card-lbl">ETA</div>
+    <div class="card-sub" id="c-finish">est. finish</div>
+  </div>
+</div>
+
+<!-- Progress bars -->
+<div class="card progress-card" style="margin-bottom:16px">
+  <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:14px">
+    <div class="progress-pct" id="pct-text">0.0%</div>
+    <div class="eta-detail">
+      <div class="eta-item">Elapsed <span id="d-elapsed">—</span></div>
+      <div class="eta-item">Remaining <span id="d-remaining">—</span></div>
+      <div class="eta-item">Started <span id="d-started">—</span></div>
+    </div>
+  </div>
+  <div class="dual-progress">
+    <div class="dual-row">
+      <div class="dual-label">Tagging</div>
+      <div class="progress-track" style="flex:1;height:16px">
+        <div class="progress-fill" id="prog-tag" style="width:0%"></div>
+      </div>
+      <div class="dual-pct" id="pct-tag" style="color:var(--green)">0%</div>
+    </div>
+    <div class="dual-row">
+      <div class="dual-label">Embedding</div>
+      <div class="progress-track" style="flex:1;height:16px">
+        <div class="progress-fill embed" id="prog-embed" style="width:0%"></div>
+      </div>
+      <div class="dual-pct" id="pct-embed" style="color:#a78bfa">0%</div>
+    </div>
+  </div>
+  <div class="progress-labels">
+    <span id="prog-left">0 tagged</span>
+    <span id="prog-right">0 remaining</span>
+  </div>
+</div>
+
+<!-- Rate sparkline + doc types -->
+<div class="grid-mid">
+  <div class="section-card card">
+    <h2>Tagging rate (files/hour)</h2>
+    <div class="sparkline-wrap">
+      <canvas id="spark"></canvas>
+    </div>
+    <div class="spark-labels">
+      <span>oldest</span><span>now</span>
+    </div>
+  </div>
+  <div class="section-card card">
+    <h2>By document type</h2>
+    <div class="bar-list" id="type-bars"></div>
+  </div>
+</div>
+
+<!-- Feed + products -->
+<div class="grid-bot">
+  <div class="section-card card">
+    <h2>Recent files tagged</h2>
+    <div class="feed" id="feed"></div>
+  </div>
+  <div class="section-card card">
+    <h2>By product</h2>
+    <div class="bar-list" id="product-bars"></div>
+    <div class="section-card card" style="margin-top:16px;padding:16px">
+      <h2 style="margin-bottom:10px">Errors</h2>
+      <div class="err-list" id="err-list"><div class="empty">No errors</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const TARGET_TOTAL  = 52490;
+const REFRESH_MS    = 10000;
+const STALL_SEC     = 180;
+const CRASH_SEC     = 600;
+const QDRANT_PROXY  = '/qdrant';   // proxied through serve.py → avoids CORS
+const COLLECTION    = 'drive_documents';
+
+let rateHistory  = [];
+let lastCount    = null;
+let lastTime     = null;
+let startTime    = null;
+let lastModified = null;
+
+const CAT_COLORS = {
+  datasheet:      '#5b7cfa', specification:  '#818cf8', design_review:  '#a78bfa',
+  test_report:    '#34d399', cost_sheet:     '#fbbf24', BOM:            '#fb923c',
+  meeting_notes:  '#94a3b8', presentation:   '#38bdf8', manual:         '#e879f9',
+  proposal:       '#f472b6', research_paper: '#4ade80', experiment:     '#facc15',
+  drawing:        '#a3e635', other:          '#6b7280',
+};
+
+function color(cat) { return CAT_COLORS[cat] || '#6b7280'; }
+
+function fmtDur(seconds) {
+  if (!seconds || seconds <= 0) return '—';
+  seconds = Math.floor(seconds);
+  if (seconds < 60)   return seconds + 's';
+  if (seconds < 3600) return Math.floor(seconds/60) + 'm ' + (seconds%60).toString().padStart(2,'0') + 's';
+  const h = Math.floor(seconds/3600);
+  const m = Math.floor((seconds%3600)/60);
+  return h + 'h ' + m.toString().padStart(2,'0') + 'm';
+}
+
+function fmtDate(d) {
+  return d.toLocaleDateString(undefined, {month:'short', day:'numeric'}) + ' ' +
+         d.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
+}
+
+async function load() {
+  let labels, vectorCount = null;
+  try {
+    const lr = await fetch('/output/file_labels.json?_=' + Date.now());
+    // Fetch Qdrant vector count via local proxy (avoids CORS)
+    try {
+      const qr = await fetch(`${QDRANT_PROXY}/collections/${COLLECTION}`);
+      if (qr.ok) {
+        const qd = await qr.json();
+        vectorCount = qd?.result?.vectors_count ?? null;
+      }
+    } catch(e) { /* Qdrant not yet started */ }
+    // Track last-modified from HTTP header
+    const lm = lr.headers.get('Last-Modified') || lr.headers.get('last-modified');
+    if (lm) {
+      const lmMs = new Date(lm).getTime();
+      if (!lastModified || lmMs > lastModified) lastModified = lmMs;
+    } else {
+      lastModified = lastModified || Date.now();
+    }
+    labels = await lr.json();
+  } catch(e) {
+    document.getElementById('last-updated').textContent = 'Load error — is serve.py running?';
+    document.getElementById('live-dot').classList.add('stale');
+    setBanner('crashed', '🔴', 'Cannot load data', 'Is portal/serve.py running?');
+    return;
+  }
+
+  const now = Date.now();
+  const entries = Object.values(labels);
+  const total   = TARGET_TOTAL;
+
+  const tagged  = entries.filter(e => !e.skipped && !e.error).length;
+  const skipped = entries.filter(e => e.skipped).length;
+  const errors  = entries.filter(e => e.error).length;
+  const done    = entries.length;
+  const pct     = total ? (done / total * 100) : 0;
+
+  // Rate calculation
+  if (lastCount !== null && lastTime !== null) {
+    const dt   = (now - lastTime) / 3600000; // hours
+    const dc   = done - lastCount;
+    if (dt > 0 && dc >= 0) {
+      const rate = dc / dt;
+      rateHistory.push({ t: now, rate });
+      if (rateHistory.length > 60) rateHistory.shift();
+    }
+    // Update lastModified if count grew (must check before updating lastCount)
+    if (dc > 0) lastModified = now;
+  }
+  if (startTime === null && done > 0) startTime = now;
+  lastCount = done;
+  lastTime  = now;
+
+  // Current rate = avg of last 5 samples
+  const recentRates = rateHistory.slice(-5).map(r => r.rate);
+  const currentRate = recentRates.length ? Math.round(recentRates.reduce((a,b)=>a+b,0)/recentRates.length) : 0;
+  const remaining   = total - done;
+  const etaSec      = currentRate > 0 ? (remaining / currentRate) * 3600 : 0;
+  const elapsedSec  = startTime ? (now - startTime) / 1000 : 0;
+  const finishDate  = etaSec > 0 ? new Date(now + etaSec * 1000) : null;
+
+  // ── Pipeline status detection ──
+
+  const staleSec = lastModified ? (now - lastModified) / 1000 : 0;
+  const finishPct = total ? done / total : 0;
+
+  if (finishPct >= 1) {
+    setBanner('done', '✅', 'Tagging complete!', `All ${total.toLocaleString()} files processed.`);
+  } else if (staleSec > CRASH_SEC) {
+    setBanner('crashed', '🔴', 'Pipeline crashed or stopped',
+      `No activity for ${fmtDur(staleSec)}. Run: .venv\\Scripts\\python.exe run.py --tag-only`);
+  } else if (staleSec > STALL_SEC) {
+    setBanner('stalled', '🟡', 'Pipeline may be stalled',
+      `No new files in ${fmtDur(staleSec)} — processing a large file or slow response from Jetson.`);
+  } else if (done === 0) {
+    setBanner('stalled', '⏳', 'Waiting for first file…',
+      'Pipeline started but no files tagged yet.');
+  } else {
+    const eta = finishDate ? `Est. finish ${fmtDate(finishDate)}` : '';
+    setBanner('running', '🟢', 'Pipeline running',
+      `${currentRate > 0 ? currentRate.toLocaleString() + ' files/hour · ' : ''}${eta}`);
+  }
+
+  // ── Embedding stats ──
+  const embedded     = entries.filter(e => (e.chunks_embedded || 0) > 0).length;
+  const totalChunks  = entries.reduce((s, e) => s + (e.chunks_embedded || 0), 0);
+  const embedPct     = total ? (embedded / total * 100) : 0;
+  const tagPct       = total ? (tagged / total * 100) : 0;
+
+  // ── Update DOM ──
+  document.getElementById('c-processed').textContent = done.toLocaleString();
+  document.getElementById('c-total').textContent     = 'of ' + total.toLocaleString() + ' files';
+  document.getElementById('c-tagged').textContent    = tagged.toLocaleString();
+  document.getElementById('c-embedded').textContent  = embedded.toLocaleString();
+  document.getElementById('c-vectors').textContent   = vectorCount !== null
+    ? vectorCount.toLocaleString() + ' vectors in Qdrant'
+    : totalChunks > 0 ? totalChunks.toLocaleString() + ' chunks stored'
+    : 'not started';
+  document.getElementById('c-skipped').textContent   = skipped.toLocaleString();
+  document.getElementById('c-errors').textContent    = errors.toLocaleString();
+  document.getElementById('c-rate').textContent      = currentRate > 0 ? currentRate.toLocaleString() : '—';
+  document.getElementById('c-rate-sub').textContent  = currentRate > 0 ? 'current avg' : 'calculating…';
+  document.getElementById('c-eta').textContent       = fmtDur(etaSec);
+  document.getElementById('c-finish').textContent    = finishDate ? fmtDate(finishDate) : '';
+
+  document.getElementById('pct-text').textContent      = tagPct.toFixed(1) + '%';
+  document.getElementById('prog-tag').style.width      = tagPct.toFixed(2) + '%';
+  document.getElementById('pct-tag').textContent       = tagPct.toFixed(1) + '%';
+  document.getElementById('prog-embed').style.width    = embedPct.toFixed(2) + '%';
+  document.getElementById('pct-embed').textContent     = embedPct.toFixed(1) + '%';
+  document.getElementById('prog-left').textContent     = tagged.toLocaleString() + ' tagged  ·  ' + embedded.toLocaleString() + ' embedded';
+  document.getElementById('prog-right').textContent    = (total - tagged).toLocaleString() + ' remaining';
+
+  document.getElementById('d-elapsed').textContent   = fmtDur(elapsedSec);
+  document.getElementById('d-remaining').textContent = fmtDur(etaSec);
+  document.getElementById('d-started').textContent   = startTime ? fmtDate(new Date(startTime)) : '—';
+
+  // ── Document type bars ──
+  const typeCounts = {};
+  entries.forEach(e => {
+    if (e.skipped || e.error) return;
+    const t = e.document_type || 'other';
+    typeCounts[t] = (typeCounts[t] || 0) + 1;
+  });
+  const topTypes = Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]).slice(0, 10);
+  const maxType  = topTypes[0]?.[1] || 1;
+  document.getElementById('type-bars').innerHTML = topTypes.map(([t, n]) => `
+    <div class="bar-row">
+      <div class="bar-key">${t}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${n/maxType*100}%;background:${color(t)}"></div></div>
+      <div class="bar-cnt">${n}</div>
+    </div>`).join('') || '<div class="empty">No data yet</div>';
+
+  // ── Product bars ──
+  const prodCounts = {};
+  entries.forEach(e => {
+    if (e.skipped || e.error) return;
+    const p = e.product || 'general';
+    if (p === 'general') return;
+    prodCounts[p] = (prodCounts[p] || 0) + 1;
+  });
+  const topProds = Object.entries(prodCounts).sort((a,b)=>b[1]-a[1]).slice(0, 8);
+  const maxProd  = topProds[0]?.[1] || 1;
+  document.getElementById('product-bars').innerHTML = topProds.map(([p, n]) => `
+    <div class="bar-row">
+      <div class="bar-key">${p}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${n/maxProd*100}%;background:var(--accent)"></div></div>
+      <div class="bar-cnt">${n}</div>
+    </div>`).join('') || '<div class="empty">No product data yet</div>';
+
+  // ── Recent feed ──
+  const recent = entries.filter(e => !e.skipped && !e.error && e.name).slice(-20).reverse();
+  document.getElementById('feed').innerHTML = recent.map(e => `
+    <div class="feed-item">
+      <span class="feed-badge" style="background:${color(e.document_type)}22;color:${color(e.document_type)}">${e.document_type || '?'}</span>
+      <span class="feed-product">${e.product || 'general'}</span>
+      <span class="feed-name">${e.name || ''}</span>
+    </div>`).join('') || '<div class="empty">No files tagged yet</div>';
+
+  // ── Errors ──
+  const errEntries = entries.filter(e => e.error).slice(-10).reverse();
+  document.getElementById('err-list').innerHTML = errEntries.length
+    ? errEntries.map(e => `<div class="err-item">${e.name || e.path || '?'}: ${e.error}</div>`).join('')
+    : '<div class="empty">No errors</div>';
+
+  // ── Sparkline ──
+  drawSparkline();
+
+  // ── Live indicator ──
+  document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  document.getElementById('live-dot').classList.remove('stale');
+}
+
+function drawSparkline() {
+  const canvas = document.getElementById('spark');
+  const ctx    = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 400;
+  const H = canvas.offsetHeight || 80;
+  canvas.width  = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  ctx.clearRect(0, 0, W, H);
+
+  const data = rateHistory.slice(-40);
+  if (data.length < 2) {
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Collecting data…', W/2, H/2);
+    return;
+  }
+
+  const maxR = Math.max(...data.map(d => d.rate), 1);
+  const pad  = 4;
+  const pts  = data.map((d, i) => ({
+    x: pad + (i / (data.length - 1)) * (W - pad*2),
+    y: H - pad - (d.rate / maxR) * (H - pad*2),
+  }));
+
+  // Fill
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(91,124,250,.35)');
+  grad.addColorStop(1, 'rgba(91,124,250,0)');
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, H);
+  pts.forEach(p => ctx.lineTo(p.x, p.y));
+  ctx.lineTo(pts[pts.length-1].x, H);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+  ctx.strokeStyle = '#5b7cfa';
+  ctx.lineWidth   = 2;
+  ctx.lineJoin    = 'round';
+  ctx.stroke();
+
+  // Current value label
+  const last = data[data.length-1];
+  ctx.fillStyle = '#5b7cfa';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(Math.round(last.rate) + '/h', W - pad, 14);
+}
+
+function setBanner(state, icon, title, sub) {
+  const banner = document.getElementById('status-banner');
+  const dot    = document.getElementById('live-dot');
+  banner.className = 'status-banner ' + state;
+  document.getElementById('s-icon').textContent  = icon;
+  document.getElementById('s-title').textContent = title;
+  document.getElementById('s-sub').textContent   = sub;
+  dot.className = 'live-dot' + (state === 'running' ? '' : state === 'stalled' ? ' stale' : ' crashed');
+}
+
+// Initial load + auto-refresh
+load();
+setInterval(load, REFRESH_MS);
+window.addEventListener('resize', drawSparkline);
+</script>
+</body>
+</html>

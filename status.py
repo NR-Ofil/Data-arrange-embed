@@ -1,7 +1,13 @@
 """Quick pipeline status check — run anytime while pipeline is running."""
+import sys
+import io
 import json
 from pathlib import Path
 from datetime import datetime
+
+# Prevent crashes on Hebrew/Greek/special chars in filenames
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 labels_file = Path("output/file_labels.json")
 index_file  = Path("output/relevant_files.json")

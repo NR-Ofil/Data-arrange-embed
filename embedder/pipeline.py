@@ -36,7 +36,7 @@ QDRANT_URL      = "http://100.84.73.5:6333"
 QDRANT_COLLECTION = "drive_documents"
 
 LLM_MODEL   = "qwen3:8b"
-EMBED_MODEL = "nomic-embed-text"
+EMBED_MODEL = "nomic-embed-text:latest"
 
 CHUNK_WORDS   = 400
 CHUNK_OVERLAP = 50
@@ -345,10 +345,25 @@ def main(tag_only: bool = False):
 
     labels = load_labels()
     done   = set(labels.keys())
-    todo   = [f for f in targets if f["path"] not in done]
 
-    print(f"Already processed:                   {len(done):,}")
-    print(f"Remaining:                            {len(todo):,}")
+    # Files not yet tagged at all
+    todo_tag = [f for f in targets if f["path"] not in done]
+
+    # Files already tagged but not yet embedded (only relevant in full mode)
+    todo_embed = [] if tag_only else [
+        f for f in targets
+        if f["path"] in done
+        and not labels[f["path"]].get("skipped")
+        and not labels[f["path"]].get("error")
+        and labels[f["path"]].get("chunks_embedded", 0) == 0
+    ]
+
+    todo = todo_embed + todo_tag
+
+    print(f"Already tagged:                      {len(done):,}")
+    print(f"Tagged but not embedded:             {len(todo_embed):,}")
+    print(f"Not yet tagged:                      {len(todo_tag):,}")
+    print(f"Total to process:                    {len(todo):,}")
 
     if not todo:
         print("\nAll files already processed.")
@@ -378,31 +393,41 @@ def main(tag_only: bool = False):
         path = Path(record["path"])
         progress.update(path.name, "extract")
 
-        # 1 — Extract text
-        tag_text, full_text = extract(path)
-        if not tag_text.strip():
-            labels[record["path"]] = {"skipped": True, "reason": "no text extracted",
-                                       "path": record["path"], "name": record["name"]}
-            save_labels(labels)
-            progress.complete(skipped=True)
-            continue
+        # Already tagged — skip LLM, go straight to embedding
+        already_tagged = record["path"] in labels and not labels[record["path"]].get("skipped")
 
-        # 2 — Tag via LLM
-        progress.update(path.name, "tagging")
-        label = ollama_tag(tag_text, path.name)
-        if "error" in label:
-            errors.append({"path": record["path"], "stage": "tag", "error": label["error"]})
-            save_labels(labels)
-            progress.complete(error=True)
-            continue
+        if already_tagged:
+            label = labels[record["path"]]
+            _, full_text = extract(path)
+            if not full_text.strip():
+                progress.complete(skipped=True)
+                continue
+        else:
+            # 1 — Extract text
+            tag_text, full_text = extract(path)
+            if not tag_text.strip():
+                labels[record["path"]] = {"skipped": True, "reason": "no text extracted",
+                                           "path": record["path"], "name": record["name"]}
+                save_labels(labels)
+                progress.complete(skipped=True)
+                continue
 
-        label.update({
-            "path":       record["path"],
-            "name":       record["name"],
-            "ext":        record["ext"],
-            "size_human": record.get("size_human", ""),
-            "modified":   record.get("modified"),
-        })
+            # 2 — Tag via LLM
+            progress.update(path.name, "tagging")
+            label = ollama_tag(tag_text, path.name)
+            if "error" in label:
+                errors.append({"path": record["path"], "stage": "tag", "error": label["error"]})
+                save_labels(labels)
+                progress.complete(error=True)
+                continue
+
+            label.update({
+                "path":       record["path"],
+                "name":       record["name"],
+                "ext":        record["ext"],
+                "size_human": record.get("size_human", ""),
+                "modified":   record.get("modified"),
+            })
 
         # 3 — Embed into Qdrant
         chunks_stored = 0
@@ -412,7 +437,11 @@ def main(tag_only: bool = False):
                 chunks_stored = embed_file(qdrant_client, record, full_text, label)
             except Exception as e:
                 errors.append({"path": record["path"], "stage": "embed", "error": str(e)})
+                label["chunks_embedded"] = 0
+                labels[record["path"]] = label
+                save_labels(labels)
                 progress.complete(error=True)
+                continue
 
         label["chunks_embedded"] = chunks_stored
         labels[record["path"]] = label
@@ -423,8 +452,8 @@ def main(tag_only: bool = False):
 
     if errors:
         err_path = OUTPUT_DIR / "pipeline_errors.json"
-        err_path.write_text(json.dumps(errors, indent=2))
-        print(f"  Errors → {err_path}")
+        err_path.write_text(json.dumps(errors, indent=2), encoding="utf-8")
+        print(f"  Errors -> {err_path}")
 
 
 if __name__ == "__main__":

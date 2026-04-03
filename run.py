@@ -7,7 +7,12 @@ Usage:
 """
 
 import sys
+import io
 import time
+import os
+
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 import json
 import subprocess
 from pathlib import Path
@@ -17,7 +22,34 @@ TAG_ONLY    = "--tag-only" in sys.argv
 LABELS_FILE = Path("output/file_labels.json")
 INDEX_FILE  = Path("output/relevant_files.json")
 LOG_FILE    = Path("output/pipeline_log.txt")
-PYTHON      = str(Path(__file__).parent / ".venv/Scripts/python.exe")
+LOCK_FILE   = Path("output/pipeline.lock")
+PYTHON      = str(Path(__file__).resolve().parent / ".venv/Scripts/python.exe")
+
+# ── Single-instance lock ───────────────────────────────────────────────────────
+# Prevents duplicate processes (system Python + .venv Python both starting).
+# Uses O_EXCL for atomic creation — only the first process wins.
+LOCK_FILE.parent.mkdir(exist_ok=True)
+try:
+    fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    os.write(fd, str(os.getpid()).encode())
+    os.close(fd)
+except FileExistsError:
+    # Lock exists — check if the owning PID is still alive
+    try:
+        pid = int(LOCK_FILE.read_text().strip())
+        import ctypes
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            print(f"Another instance already running (PID {pid}). Exiting.")
+            sys.exit(0)
+        # Stale lock (process dead) — overwrite and continue
+        LOCK_FILE.write_text(str(os.getpid()))
+    except Exception:
+        LOCK_FILE.write_text(str(os.getpid()))
+
+import atexit
+atexit.register(lambda: LOCK_FILE.unlink(missing_ok=True))
 
 MAX_RESTARTS    = 999
 STATUS_INTERVAL = 3600   # seconds between status prints

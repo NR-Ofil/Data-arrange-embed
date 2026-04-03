@@ -1,9 +1,19 @@
 """
 Phase 1 - Network Drive Scanner
-Walks R:\\ and produces:
-  output/file_index.json       - full metadata per file
-  output/summary_by_type.csv  - counts + sizes per extension
-  output/relevant_files.json  - embeddable subset (docs, text, code)
+
+Walks R:\\ (or a given subdirectory) and produces a complete file index
+that later phases use for tagging and embedding.
+
+Usage:
+    python scanner/scan.py              # full scan of R:\\
+    python scanner/scan.py R:\\Subdir   # test on a specific folder
+
+Outputs (written to output/):
+    file_index.json       - full metadata for every file on the drive
+    relevant_files.json   - embeddable subset (documents, text, code)
+    summary_by_type.csv   - per-extension file counts and total sizes
+    report.html           - visual scan report (open in browser)
+    scan_errors.json      - files that could not be read (permissions etc.)
 """
 
 import os
@@ -18,7 +28,8 @@ from datetime import datetime
 DRIVE_ROOT = Path("R:/")
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 
-# Extensions considered relevant for LLM embedding
+# Extensions considered relevant for LLM embedding, grouped by category.
+# Each category maps to a set of lowercase extensions.
 EMBEDDABLE = {
     "document": {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
                  ".odt", ".ods", ".odp", ".rtf"},
@@ -29,7 +40,7 @@ EMBEDDABLE = {
                  ".cfg", ".env"},
 }
 
-# Extensions we explicitly skip (binary/media — not useful to embed)
+# Extensions explicitly skipped — binary/media formats with no embeddable text.
 SKIP_EXTENSIONS = {
     ".exe", ".dll", ".so", ".dylib", ".sys", ".msi", ".bin", ".iso",
     ".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm",
@@ -42,19 +53,25 @@ SKIP_EXTENSIONS = {
     ".tmp", ".bak", ".swp", ".DS_Store", ".lnk",
 }
 
-# Skip these folder names entirely
+# Folder names pruned from the walk entirely — their contents are never visited.
 SKIP_DIRS = {
     "$RECYCLE.BIN", "System Volume Information", ".git", "__pycache__",
     "node_modules", ".vs", ".idea", "Thumbs.db",
 }
 
-# Max file size to flag as embeddable (files larger than this need chunking care)
+# Files larger than this threshold are still indexed but flagged as large_file=True.
+# The embedder will chunk them carefully.
 EMBED_SIZE_WARN_MB = 50
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def classify_extension(ext: str) -> str:
+    """Return the category for a file extension.
+
+    Returns one of: 'document', 'text', 'code', 'skip', or 'other'.
+    'other' covers extensions not in any list (e.g. .sldprt CAD files).
+    """
     ext = ext.lower()
     for category, exts in EMBEDDABLE.items():
         if ext in exts:
@@ -65,6 +82,7 @@ def classify_extension(ext: str) -> str:
 
 
 def fmt_size(n: int) -> str:
+    """Convert byte count to a human-readable string (e.g. '1.4 GB')."""
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
             return f"{n:.1f} {unit}"
@@ -75,9 +93,21 @@ def fmt_size(n: int) -> str:
 # ── Main scan ────────────────────────────────────────────────────────────────
 
 def scan(root: Path) -> tuple[list[dict], dict]:
+    """Walk the directory tree under root and collect metadata for every file.
+
+    Skips directories listed in SKIP_DIRS and any hidden directories (name
+    starting with '.').  Permission errors are caught per-file so the walk
+    continues even if individual files are inaccessible.
+
+    Returns:
+        records: list of dicts, one per file, with keys:
+                 path, name, ext, category, size_bytes, size_human,
+                 modified, embeddable, large_file
+        stats:   dict mapping extension → {count, total_bytes, category}
+    """
     records = []
     errors = []
-    stats: dict[str, dict] = {}  # ext → {count, total_bytes}
+    stats: dict[str, dict] = {}  # ext -> {count, total_bytes, category}
 
     total_seen = 0
     start = datetime.now()
@@ -85,7 +115,7 @@ def scan(root: Path) -> tuple[list[dict], dict]:
     print(f"Scanning {root} …  (Ctrl-C to abort)")
 
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        # Prune skip dirs in-place so os.walk doesn't descend into them
+        # Prune skip dirs in-place so os.walk doesn't descend into them.
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS
                        and not d.startswith(".")]
 
@@ -107,25 +137,26 @@ def scan(root: Path) -> tuple[list[dict], dict]:
             category = classify_extension(ext)
             size = stat.st_size
 
+            # Some files on R:\ have corrupt timestamps — guard against crashes.
             try:
                 modified = datetime.fromtimestamp(stat.st_mtime).isoformat()
             except (OSError, OverflowError, ValueError):
                 modified = None
 
             record = {
-                "path":      str(fpath),
-                "name":      fname,
-                "ext":       ext,
-                "category":  category,
+                "path":       str(fpath),
+                "name":       fname,
+                "ext":        ext,
+                "category":   category,
                 "size_bytes": size,
                 "size_human": fmt_size(size),
-                "modified":  modified,
+                "modified":   modified,
                 "embeddable": category in EMBEDDABLE,
                 "large_file": size > EMBED_SIZE_WARN_MB * 1024 * 1024,
             }
             records.append(record)
 
-            # Accumulate stats
+            # Accumulate per-extension stats for the CSV summary.
             if ext not in stats:
                 stats[ext] = {"count": 0, "total_bytes": 0, "category": category}
             stats[ext]["count"] += 1
@@ -135,7 +166,7 @@ def scan(root: Path) -> tuple[list[dict], dict]:
     print(f"\nDone. {total_seen:,} files in {elapsed}s. {len(errors)} errors.")
     if errors:
         err_path = OUTPUT_DIR / "scan_errors.json"
-        err_path.write_text(json.dumps(errors, indent=2))
+        err_path.write_text(json.dumps(errors, indent=2), encoding="utf-8")
         print(f"  Errors written to {err_path}")
 
     return records, stats
@@ -144,9 +175,13 @@ def scan(root: Path) -> tuple[list[dict], dict]:
 # ── Output writers ────────────────────────────────────────────────────────────
 
 def write_html_report(records: list[dict], stats: dict, root: Path):
-    """Produces a self-contained HTML report you can open in any browser."""
+    """Produce a self-contained HTML report you can open in any browser.
 
-    # --- aggregate by category ---
+    Includes: category storage breakdown, top extensions by count,
+    top folders by embeddable file count, 50 largest embeddable files.
+    """
+
+    # Aggregate counts and bytes per category.
     by_cat: dict[str, dict] = {}
     for r in records:
         c = r["category"]
@@ -160,13 +195,13 @@ def write_html_report(records: list[dict], stats: dict, root: Path):
     embeddable  = [r for r in records if r["embeddable"]]
     large_files = [r for r in embeddable if r["large_file"]]
 
-    # top 20 extensions by file count
+    # Top 20 extensions by file count.
     top_ext = sorted(stats.items(), key=lambda x: x[1]["count"], reverse=True)[:20]
 
-    # top 50 largest embeddable files
+    # Top 50 largest embeddable files (to identify chunking candidates).
     top_large = sorted(embeddable, key=lambda x: x["size_bytes"], reverse=True)[:50]
 
-    # folder-level summary: count embeddable files per top-level folder
+    # Top 30 first-level folders by embeddable file count.
     folder_counts: dict[str, int] = {}
     for r in embeddable:
         parts = Path(r["path"]).parts
@@ -203,7 +238,7 @@ def write_html_report(records: list[dict], stats: dict, root: Path):
     def large_rows():
         rows = []
         for r in top_large:
-            flag = " ⚠" if r["large_file"] else ""
+            flag = " (large)" if r["large_file"] else ""
             rows.append(f"""
             <tr>
               <td style="word-break:break-all;font-size:12px">{r['path']}</td>
@@ -313,42 +348,55 @@ def write_html_report(records: list[dict], stats: dict, root: Path):
 
     path = OUTPUT_DIR / "report.html"
     path.write_text(html, encoding="utf-8")
-    print(f"report.html            → {path}  (open in browser)")
-
+    print(f"report.html            -> {path}  (open in browser)")
 
 
 def write_index(records: list[dict]):
+    """Write all file metadata to output/file_index.json.
+
+    This is the full index used by the search portal (portal/index.html).
+    """
     path = OUTPUT_DIR / "file_index.json"
-    path.write_text(json.dumps(records, indent=2))
-    print(f"file_index.json        → {path}  ({len(records):,} files)")
+    path.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    print(f"file_index.json        -> {path}  ({len(records):,} files)")
 
 
 def write_summary(stats: dict):
+    """Write per-extension counts and sizes to output/summary_by_type.csv.
+
+    Sorted by total bytes descending so the most space-consuming types appear first.
+    """
     path = OUTPUT_DIR / "summary_by_type.csv"
     rows = sorted(stats.items(), key=lambda x: x[1]["total_bytes"], reverse=True)
-    with path.open("w", newline="") as f:
+    with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["extension", "category", "count", "total_bytes", "total_size"])
         for ext, d in rows:
             w.writerow([ext or "(no ext)", d["category"], d["count"],
                         d["total_bytes"], fmt_size(d["total_bytes"])])
-    print(f"summary_by_type.csv    → {path}  ({len(rows)} extension types)")
+    print(f"summary_by_type.csv    -> {path}  ({len(rows)} extension types)")
 
 
 def write_relevant(records: list[dict]):
+    """Write the embeddable subset to output/relevant_files.json.
+
+    Only files with embeddable=True are included. This is the input file
+    consumed by embedder/pipeline.py in Phase 2+3.
+    """
     relevant = [r for r in records if r["embeddable"]]
     path = OUTPUT_DIR / "relevant_files.json"
-    path.write_text(json.dumps(relevant, indent=2))
+    path.write_text(json.dumps(relevant, indent=2), encoding="utf-8")
     total_bytes = sum(r["size_bytes"] for r in relevant)
     large = [r for r in relevant if r["large_file"]]
-    print(f"relevant_files.json    → {path}  ({len(relevant):,} files, "
+    print(f"relevant_files.json    -> {path}  ({len(relevant):,} files, "
           f"{fmt_size(total_bytes)} total)")
     if large:
-        print(f"  ⚠  {len(large)} files exceed {EMBED_SIZE_WARN_MB}MB — "
+        print(f"  WARNING: {len(large)} files exceed {EMBED_SIZE_WARN_MB}MB — "
               f"will need careful chunking in Phase 3")
 
 
 def print_top_summary(records: list[dict]):
+    """Print a category breakdown table to stdout after the scan completes."""
     by_cat: dict[str, int] = {}
     by_cat_bytes: dict[str, int] = {}
     for r in records:
@@ -356,10 +404,10 @@ def print_top_summary(records: list[dict]):
         by_cat[c] = by_cat.get(c, 0) + 1
         by_cat_bytes[c] = by_cat_bytes.get(c, 0) + r["size_bytes"]
 
-    print("\n── Category breakdown ────────────────────────────────")
+    print("\n-- Category breakdown ------------------------------------------------")
     for cat in sorted(by_cat, key=lambda x: by_cat_bytes[x], reverse=True):
         print(f"  {cat:<12} {by_cat[cat]:>8,} files   {fmt_size(by_cat_bytes[cat]):>10}")
-    print("──────────────────────────────────────────────────────")
+    print("----------------------------------------------------------------------")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -375,7 +423,7 @@ if __name__ == "__main__":
 
     records, stats = scan(root)
 
-    print("\nWriting output files …")
+    print("\nWriting output files ...")
     write_index(records)
     write_summary(stats)
     write_relevant(records)
