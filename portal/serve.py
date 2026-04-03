@@ -8,8 +8,10 @@ import http.server
 import socketserver
 import os
 import sys
+import json
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 PORT = 8765
@@ -40,6 +42,36 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'{"error":"qdrant unreachable"}')
             return
+        if self.path.startswith("/open"):
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            path_list = params.get("path", [])
+            if not path_list:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"missing path"}')
+                return
+            target = path_list[0].replace("/", "\\")
+            if not target.upper().startswith("R:\\"):
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"path not allowed"}')
+                return
+            try:
+                os.startfile(target)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+            except OSError as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+            return
+
         super().do_GET()
 
     def end_headers(self):
